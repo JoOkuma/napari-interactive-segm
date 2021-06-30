@@ -1,41 +1,57 @@
-"""
-This module is an example of a barebones QWidget plugin for napari
+import numpy as np
+from numpy.typing import ArrayLike
+import pyift.shortestpath as sp
 
-It implements the ``napari_experimental_provide_dock_widget`` hook specification.
-see: https://napari.org/docs/dev/plugins/hook_specifications.html
-
-Replace code below according to your needs.
-"""
+from napari.layers import Image, Labels
+from napari.qt.threading import thread_worker
 from napari_plugin_engine import napari_hook_implementation
-from qtpy.QtWidgets import QWidget, QHBoxLayout, QPushButton
+from qtpy.QtWidgets import QMessageBox
 from magicgui import magic_factory
 
 
-class ExampleQWidget(QWidget):
-    # your QWidget.__init__ can optionally request the napari viewer instance
-    # in one of two ways:
-    # 1. use a parameter called `napari_viewer`, as done here
-    # 2. use a type annotation of 'napari.viewer.Viewer' for any parameter
-    def __init__(self, napari_viewer):
-        super().__init__()
-        self.viewer = napari_viewer
-
-        btn = QPushButton("Click me!")
-        btn.clicked.connect(self._on_click)
-
-        self.setLayout(QHBoxLayout())
-        self.layout().addWidget(btn)
-
-    def _on_click(self):
-        print("napari has", len(self.viewer.layers), "layers")
+def emit_message(text: str) -> None:
+    msg_box = QMessageBox()
+    msg_box.setText(text)
+    msg_box.exec_()
 
 
-@magic_factory
-def example_magic_widget(img_layer: "napari.layers.Image"):
-    print(f"you have selected {img_layer}")
+@magic_factory(call_button='Segment',
+               background_label=dict(value=1),
+               transform_intensity=dict(value=True, tooltip='Indicates if segmentation algorithm is applied to the'
+                                                            'original image or with contrast and gamma changes.'))
+def interactive_segmentation_widget(
+        image_layer: Image,
+        seeds_layer: Labels,
+        output_layer: Labels,
+        background_label: int,
+        transform_intensity: bool,
+) -> None:
+    if image_layer is None or seeds_layer is None or output_layer is None:
+        emit_message('All layers must be selected to perform segmentation.')
+        return
+
+    image = image_layer.data
+    seeds = seeds_layer.data
+    if image.shape != seeds.shape:
+        emit_message(f'Image and seeds shape must match. {image.shape} and {seeds.shape} found.')
+        return
+
+    def _update_label(labels: ArrayLike) -> None:
+        output_layer.data = labels
+
+    @thread_worker(connect=dict(returned=_update_label))
+    def _segmentation_worker(seeds: ArrayLike, image: ArrayLike) -> ArrayLike:
+        if transform_intensity:
+            image = image.astype(float)
+            np.clip(image, *image_layer.contrast_limits, image)
+            np.power(image, image_layer.gamma, out=image)
+        _, _, _, labels = sp.oriented_seed_competition(seeds, image=image, alpha=-0.5, background_label=-1)
+        labels[labels == background_label] = 0
+        return labels
+
+    _segmentation_worker(seeds, image)
 
 
 @napari_hook_implementation
 def napari_experimental_provide_dock_widget():
-    # you can return either a single widget, or a sequence of widgets
-    return [ExampleQWidget, example_magic_widget]
+    return interactive_segmentation_widget, {'name': 'Interactive Segmentation'}
