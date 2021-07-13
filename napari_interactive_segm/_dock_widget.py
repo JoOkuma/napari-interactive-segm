@@ -16,6 +16,9 @@ def emit_message(text: str) -> None:
 
 
 @magic_factory(call_button='Segment',
+               alpha=dict(value=-0.2, min=-1, max=1, step=0.1,
+                          tooltip='Sets the algorithm orientation. Negative values favors segmentation from'
+                                              'brighter to darker regions. Positive favors the opposite. Zero is neutral.'),
                background_label=dict(value=1),
                transform_intensity=dict(value=True, tooltip='Indicates if segmentation algorithm is applied to the'
                                                             'original image or with contrast and gamma changes.'))
@@ -24,6 +27,7 @@ def interactive_segmentation_widget(
         seeds_layer: Labels,
         output_layer: Labels,
         background_label: int,
+        alpha: float,
         transform_intensity: bool,
 ) -> None:
     if image_layer is None or seeds_layer is None or output_layer is None:
@@ -40,16 +44,16 @@ def interactive_segmentation_widget(
         output_layer.data = labels
 
     @thread_worker(connect=dict(returned=_update_label))
-    def _segmentation_worker(seeds: ArrayLike, image: ArrayLike) -> ArrayLike:
+    def _segmentation_worker(seeds: ArrayLike, image: ArrayLike, alpha: float) -> ArrayLike:
         if transform_intensity:
             image = image.astype(float)
             np.clip(image, *image_layer.contrast_limits, image)
             np.power(image, image_layer.gamma, out=image)
-        _, _, _, labels = sp.oriented_seed_competition(seeds, image=image, alpha=-0.5, background_label=-1)
+        _, _, _, labels = sp.oriented_seed_competition(seeds, image=image, alpha=alpha, background_label=-1)
         labels[labels == background_label] = 0
         return labels
 
-    _segmentation_worker(seeds, image)
+    _segmentation_worker(seeds, image, alpha)
 
 
 @napari_hook_implementation
